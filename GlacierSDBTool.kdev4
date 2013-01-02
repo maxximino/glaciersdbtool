@@ -1,0 +1,4 @@
+[Project]
+Name=GlacierSDBTool
+Manager=KDevCMakeManager
+VersionControl=kdevgit
