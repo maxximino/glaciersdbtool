@@ -1,0 +1,16 @@
+#!/bin/bash
+JOBLIST=$(glaciersdbtool listjobs)
+for COMPLETEDJOB in $(echo "$JOBLIST" |xmlstarlet sel -t -v 'JobList/Job[StatusCode="Succeeded"]/JobId' - ); do
+echo Completed $COMPLETEDJOB
+ARCHIVEID=$(echo "$JOBLIST" |xmlstarlet sel -t -v 'JobList/Job[JobId="'$COMPLETEDJOB'"]/ArchiveId' - )
+
+FNAME=$(simpledb $(cat ~/.zfs_glacier_resumefiles/simpledbcreds) get zfsdatasets $ARCHIVEID |sort |grep -E '^(ARCHIVE_NUMBER|poolname|machine|dataset|snapname|fromsnap)=' |tr / - |sed 's/^.*=//' |xargs -n10 echo |tr ' ' _|tr -d '()').zfs
+CMD="$(glaciersdbtool getdownload -j $COMPLETEDJOB ) --continue -O $FNAME -T 4 -t 4 -w 3 --random-wait"
+echo $CMD
+(
+flock -n 200
+if [ "$?" == "0" ]; then
+	bash -c "$CMD"
+fi
+) 200>$FNAME.lock
+done

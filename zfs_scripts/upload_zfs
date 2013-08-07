@@ -1,0 +1,86 @@
+#!/bin/bash
+function get_zfsguid(){
+zfs send $1 2>/dev/null  |head -c 1000000 |zstreamdump |grep toguid |head -n1 |cut -f3 -d\ 
+}
+function get_zfscrtxg(){
+zdb -de $1 2>/dev/null |sed 's/^.*cr_txg \([0-9]*\),.*$/\1/'
+}
+
+KEYSUM=$(echo $(cat ~/.zfs_glacier_resumefiles/.salt|base64) $ZFS_GLAC_KEY |sha512sum|cut -f1 -d\ )
+if [ "$KEYSUM" != "$(cat ~/.zfs_glacier_resumefiles/usual_key)" ]; then
+	echo Your ZFS_GLAC_KEY environment variable is not set to the usual key.... aborting.
+	exit;
+fi
+
+POOL=$1
+DS=$2
+UPLSNAP=$3
+PREVSNAP=$4
+COMPRTYPE=xz
+OPERATION=upload
+
+if [ "$5" == "--resume" ]; then OPERATION=resumeupload; fi
+
+PREVSNAP_PARAM="-i $PREVSNAP"
+if [ "$PREVSNAP" == "@none@" ]; then PREVSNAP_PARAM=""; PREVSNAP=""; fi
+if [ "$PREVSNAP" == "@auto@" ]; then 
+	AVAILABLE_SNAPS=$(zfs list -t snapshot -d 1 mypool/orig_boot -H -o name)
+	UPLOADED_SNAPS=$(simpledb $(cat ~/.zfs_glacier_resumefiles/simpledbcreds) select 'select snapname from zfsdatasets WHERE dataset="'$DS'" AND poolname="'$POOL'" and machine="'$(hostname)'" and snap_ts > "0" order by snap_ts desc' |grep '^\s*snapname=' |sed 's/^\s*snapname=//')
+	for i in $UPLOADED_SNAPS; do
+		for j in $AVAILABLE_SNAPS; do
+			if [ "$i" == "$UPLSNAP" ]; then continue; fi
+			if [ "${POOL}/${DS}@$i" == "$j" ]; then
+				PREVSNAP=$i;
+				break 2;
+			fi
+		done
+	done
+	if [ "$PREVSNAP" == "@auto@" ]; then
+		PREVSNAP=""
+		PREVSNAP_PARAM=""
+	else
+		PREVSNAP_PARAM="-i $PREVSNAP";
+	fi
+fi
+
+UPLSNAP_TS=$(date --date=@$(zfs get creation ${POOL}/${DS}@${UPLSNAP} -pH |awk '{print $3}') +%Y%m%d%H%M%S)
+
+RESUMEFILE=~/.zfs_glacier_resumefiles/$(echo $1 $2 $3 $4 |sha512sum |cut -f1 -d\ )
+
+UPLSNAP_GUID=$(get_zfsguid ${POOL}/${DS}@${UPLSNAP})
+PREVSNAP_GUID=$(get_zfsguid ${POOL}/${DS}@${PREVSNAP})
+
+UPLSNAP_TXG=$(get_zfscrtxg ${POOL}/${DS}@${UPLSNAP})
+PREVSNAP_TXG=$(get_zfscrtxg ${POOL}/${DS}@${PREVSNAP})
+
+zfs send ${POOL}/${DS}@${UPLSNAP} ${PREVSNAP_PARAM} |pv -pterab -c -N uncompressed |pxz |pv -pterab -c -N compressed |openssl enc -aes-256-ctr  -pass env:ZFS_GLAC_KEY -S $(echo $POOL $DS $UPLSNAP $PREVSNAP |sha256sum |head -c16 ) |glaciersdbtool $OPERATION -r ${RESUMEFILE} 4<<EOF
+Backup=ZFS
+machine=$(hostname)
+poolname=$POOL
+dataset=$DS
+snapname=$UPLSNAP
+fromsnap=$PREVSNAP
+snap_guid=$UPLSNAP_GUID
+fromsnap_guid=$PREVSNAP_GUID
+snap_txg=$UPLSNAP_TXG
+fromsnap_txg=$FROMSNAP_TXG
+compression=$COMPRTYPE
+encralgo=aes-256-ctr
+encr_key_sha512=$KEYSUM
+encr_key_salt=$(cat ~/.zfs_glacier_resumefiles/.salt|base64)
+snap_ts=$UPLSNAP_TS
+LINEAR_SHA256_OF_ENTIRE_STREAM=/*LINEAR_SHA256_OF_ENTIRE_STREAM*/
+TREE_SHA256_OF_ENTIRE_STREAM=/*TREE_SHA256_OF_ENTIRE_STREAM*/
+TOTAL_NUMBER_OF_ARCHIVES=/*TOTAL_NUMBER_OF_ARCHIVES*/
+STREAM_SIZE_BYTES=/*STREAM_SIZE_BYTES*/
+LINEAR_SHA256_FROM_START_OF_STREAM=/*LINEAR_SHA256_FROM_START_OF_STREAM*/
+TREE_SHA256_FROM_START_OF_STREAM=/*TREE_SHA256_FROM_START_OF_STREAM*/
+ARCHIVE_NUMBER=/*ARCHIVE_NUMBER*/
+ARCHIVE_FIRST_BYTE_IN_STREAM=/*ARCHIVE_FIRST_BYTE_IN_STREAM*/
+ARCHIVE_LAST_BYTE_IN_STREAM=/*ARCHIVE_LAST_BYTE_IN_STREAM*/
+PREVIOUS_ARCHIVE_ID=/*PREVIOUS_ARCHIVE_ID*/
+NEXT_ARCHIVE_ID=/*NEXT_ARCHIVE_ID*/
+LINEAR_SHA256_OF_ARCHIVE=/*LINEAR_SHA256_OF_ARCHIVE*/
+TREE_SHA256_OF_ARCHIVE=/*TREE_SHA256_OF_ARCHIVE*/
+ARCHIVE_SIZE_BYTES=/*ARCHIVE_SIZE_BYTES*/
+EOF
