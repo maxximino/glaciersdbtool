@@ -48,7 +48,7 @@ class AWSRequest
 			payload=NULL;
 			payloadsize=0;
 			payloadsent=0;
-			executed=false;
+			already_signed=false;
 			outstream=NULL;
 		}
 		void setHost(string h) {
@@ -86,6 +86,7 @@ class AWSRequest
 			outstream=o;
 		}
 		void execute();
+		void cleanup();
 		void print_as_wget();
 		static shared_ptr<AWSRequest> getGlacierRequest(Config& cfg);
 		static shared_ptr<AWSRequest> getSimpleDBRequest(Config& cfg);
@@ -112,7 +113,7 @@ class AWSRequest
 		void* payload;
 		unsigned long payloadsent;
 		unsigned long payloadsize;
-		bool executed;
+		bool already_signed;
 		virtual void sign()=0;
 		string buildUrl();
 		string buildQS();

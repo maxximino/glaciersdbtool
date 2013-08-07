@@ -11,7 +11,7 @@ include_directories(
 )
 target_link_libraries(glaciersdbtool
   ${Boost_IOSTREAMS_LIBRARY}
-  ${OpenSSL_LIBRARY}
+  ${OPENSSL_LIBRARIES}
   ${CURL_LIBRARY}
 )
 add_definitions("-std=c++0x")

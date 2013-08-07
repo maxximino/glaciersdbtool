@@ -14,6 +14,7 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>
 */
+#include <unistd.h>
 #include "awsrequest.h"
 class WebResponseException: public boost::exception {};
 
@@ -99,8 +100,6 @@ shared_ptr<AWSRequest> AWSRequest::getSimpleDBRequest(Config& cfg)
 
 void AWSRequest::print_as_wget()
 {
-	assert(!executed);
-	executed=true;
 	sign();
 	cout << "wget " << buildUrl() << " ";
 	if(method =="GET") {
@@ -114,10 +113,12 @@ for(std::pair<string,string> p: reqheaders) {
 	}
 	cout << endl;
 }
+void AWSRequest::cleanup(){
+   payloadsent = 0;
+   respheaders.clear();
+}
 void AWSRequest::execute()
 {
-	assert(!executed);
-	executed=true;
 	sign();
 	CURL* handle = curl_easy_init();
 	struct curl_slist* headerlist=NULL;
@@ -160,13 +161,25 @@ for(std::pair<string,string> p: reqheaders) {
 }
 void AWSRequest::execute_and_verify(int expectedStatusCode)
 {
+	unsigned long timeo = 1;
+	const unsigned long maxtimeo = 65; //Slightly less than 40 seconds of total sleeping time between retries.
 	stringstream out("");
-	setOutputStream(&out);
-	execute();
+	do{
+	  if(timeo!=1){
+	    usleep(300000*timeo); //300ms * timeo
+	    cerr << "Retrying failed request:" << buildUrl() << endl;
+	  }
+	  cleanup();
+	  out.str("");
+	  setOutputStream(&out);
+	  execute();
+	  timeo <<=1;
+	}
+	while((getHttpResponseCode() != expectedStatusCode) && (timeo < maxtimeo));
 	if(getHttpResponseCode() != expectedStatusCode) {
 		stringstream err("Headers:");
 		err << endl;
-for(pair<string,string>p : getResponseHeaders()) {
+		for(pair<string,string>p : getResponseHeaders()) {
 			err << p.first << ":" << p.second << endl;
 		}
 		err << endl << endl << out.str();
@@ -226,6 +239,8 @@ for(std::pair<string,string> p: reqheaders) {
 }
 void AWSRequestV4::sign()
 {
+	if(already_signed) return;
+	already_signed=true;
 	boost::posix_time::ptime pt = boost::date_time::second_clock<boost::posix_time::ptime>::universal_time();
 	addReqHeader("Host",host);
 	addReqHeader("Date",FormatTS(pt,"%Y%m%dT%H%M%SZ"));
@@ -249,6 +264,7 @@ void AWSRequestV4::sign()
 }
 void AWSRequestV2::sign()
 {
+	if(already_signed) return;
 	boost::posix_time::ptime pt = boost::date_time::second_clock<boost::posix_time::ptime>::universal_time();
 	addReqHeader("Host",host);
 	addQueryStringParameter("AWSAccessKeyId",accesskey);
